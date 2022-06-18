@@ -20,9 +20,11 @@
 #include <nav_msgs/msg/odometry.h>
 #include <geometry_msgs/msg/twist.h>
 
+
+
 // custom transport layer definition
 #include "balltze_transport.h"
-
+#include "batt.hpp"
 
 #define ERROR_LOOP_LED_PIN (16)
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
@@ -52,8 +54,14 @@ rcl_allocator_t allocator;
 rcl_subscription_t cmd_vel_subscriber;
 rcl_publisher_t odometry_publisher;
 rcl_publisher_t joint_state_publisher;
+
+rcl_publisher_t batt_publisher;
+sensor_msgs__msg__BatteryState batt_msg;
+
 nav_msgs__msg__Odometry odometry_msg;
 geometry_msgs__msg__Twist cmd_vel_msg;
+
+
 bool micro_ros_init_successful;
 
 
@@ -92,6 +100,18 @@ void subscription_callback(const void * msgin) {
 void control_timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
   (void) last_call_time;
   if (timer != NULL) {
+
+    int result = analogRead(A2);
+    if (result > 500)
+    {
+      digitalWrite(PICO_DEFAULT_LED_PIN, 1);
+    }
+    else
+    {
+      digitalWrite(PICO_DEFAULT_LED_PIN, 0);
+    }
+
+    battery_read(batt_msg);
     // // update encode readings
     // int current_rotation_left = encoder_left.get_rotation();
     // int current_rotation_right = encoder_right.get_rotation();
@@ -121,9 +141,13 @@ void control_timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
     // clock_gettime(0, &tv);
     // odometry_msg.header.stamp.nanosec = tv.tv_nsec;
     // odometry_msg.header.stamp.sec = tv.tv_sec;
+//    batt_msg.voltage = result;
+//    batt_msg.power_supply_status = result >> 2;
+
+    RCSOFTCHECK(rcl_publish(&batt_publisher, &batt_msg, NULL));
 
     // publish odometry message
-    RCSOFTCHECK(rcl_publish(&odometry_publisher, &odometry_msg, NULL));
+    //RCSOFTCHECK(rcl_publish(&odometry_publisher, &odometry_msg, NULL));
   }
 }
 
@@ -145,11 +169,17 @@ bool create_entities() {
     "cmd_vel"));
 
   // create publisher
-  RCCHECK(rclc_publisher_init_default(
+/*  RCCHECK(rclc_publisher_init_default(
     &odometry_publisher,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
     "odometry/wheels"));
+*/
+  RCCHECK(rclc_publisher_init_default(
+    &batt_publisher,
+    &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, BatteryState),
+    "battery_state"));
 
   // create timer running at 25 Hz
   const unsigned int timer_timeout = 40;
@@ -182,6 +212,7 @@ bool create_entities() {
     RCCHECK(rmw_uros_sync_session(timeout_ms));
     time_ms = rmw_uros_epoch_millis(); 
   }
+  return true;
 }
 
 void destroy_entities()
@@ -189,6 +220,7 @@ void destroy_entities()
   rmw_context_t * rmw_context = rcl_context_get_rmw_context(&support.context);
   (void) rmw_uros_set_context_entity_destroy_session_timeout(rmw_context, 0);
 
+RCSOFTCHECK(rcl_publisher_fini(&batt_publisher, &node));
   RCSOFTCHECK(rcl_publisher_fini(&odometry_publisher, &node));
   RCSOFTCHECK(rcl_timer_fini(&timer));
   RCSOFTCHECK(rclc_executor_fini(&executor));
@@ -210,8 +242,10 @@ void setup() {
 
 
   // setup error LED
-  pinMode(ERROR_LOOP_LED_PIN, OUTPUT);
-  digitalWrite(ERROR_LOOP_LED_PIN, LOW);
+  pinMode(PICO_DEFAULT_LED_PIN, OUTPUT);
+  digitalWrite(PICO_DEFAULT_LED_PIN, LOW);
+
+  battery_init(batt_msg);
 
   state = WAITING_AGENT;
 }
