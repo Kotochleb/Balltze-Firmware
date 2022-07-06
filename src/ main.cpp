@@ -23,6 +23,7 @@
 // custom transport layer definition
 #include "balltze_transport.h"
 
+#include "imu.hpp"
 
 #define ERROR_LOOP_LED_PIN (16)
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
@@ -52,6 +53,10 @@ rcl_allocator_t allocator;
 rcl_subscription_t cmd_vel_subscriber;
 rcl_publisher_t odometry_publisher;
 rcl_publisher_t joint_state_publisher;
+
+rcl_publisher_t imu_publisher;
+sensor_msgs__msg__Imu imu_msg;
+
 nav_msgs__msg__Odometry odometry_msg;
 geometry_msgs__msg__Twist cmd_vel_msg;
 bool micro_ros_init_successful;
@@ -65,23 +70,6 @@ enum states {
 } state;
 
 
-
-void euler_to_quat(float x, float y, float z, double* q) {
-  float c1 = cos((y*PI/180.0)/2.0);
-  float c2 = cos((z*PI/180.0)/2.0);
-  float c3 = cos((x*PI/180.0)/2.0);
-
-  float s1 = sin((y*PI/180.0)/2.0);
-  float s2 = sin((z*PI/180.0)/2.0);
-  float s3 = sin((x*PI/180.0)/2.0);
-
-  q[0] = c1 * c2 * c3 - s1 * s2 * s3;
-  q[1] = s1 * s2 * c3 + c1 * c2 * s3;
-  q[2] = s1 * c2 * c3 + c1 * s2 * s3;
-  q[3] = c1 * s2 * c3 - s1 * c2 * s3;
-}
-
-
 void subscription_callback(const void * msgin) {
   const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
   cmd_vel_msg.linear.x = msg->linear.x;
@@ -92,6 +80,9 @@ void subscription_callback(const void * msgin) {
 void control_timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
   (void) last_call_time;
   if (timer != NULL) {
+
+  imu_read(imu_msg);
+    
     // // update encode readings
     // int current_rotation_left = encoder_left.get_rotation();
     // int current_rotation_right = encoder_right.get_rotation();
@@ -122,8 +113,8 @@ void control_timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
     // odometry_msg.header.stamp.nanosec = tv.tv_nsec;
     // odometry_msg.header.stamp.sec = tv.tv_sec;
 
-    // publish odometry message
-    RCSOFTCHECK(rcl_publish(&odometry_publisher, &odometry_msg, NULL));
+    // publish imu message
+    RCSOFTCHECK(rcl_publish(&imu_publisher, &imu_msg, NULL));
   }
 }
 
@@ -151,6 +142,12 @@ bool create_entities() {
     ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
     "odometry/wheels"));
 
+  RCCHECK(rclc_publisher_init_default(
+    &imu_publisher,
+    &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
+    "imu"));
+
   // create timer running at 25 Hz
   const unsigned int timer_timeout = 40;
   RCCHECK(rclc_timer_init_default(
@@ -161,7 +158,7 @@ bool create_entities() {
 
   // create executor
   executor = rclc_executor_get_zero_initialized_executor();
-  RCCHECK(rclc_executor_init(&executor, &support.context, 2, &allocator));
+  RCCHECK(rclc_executor_init(&executor, &support.context, 3, &allocator));
   RCCHECK(rclc_executor_add_timer(&executor, &timer));
   RCCHECK(rclc_executor_add_subscription(&executor, &cmd_vel_subscriber, &cmd_vel_msg, &subscription_callback, ON_NEW_DATA));
 
@@ -182,6 +179,7 @@ bool create_entities() {
     RCCHECK(rmw_uros_sync_session(timeout_ms));
     time_ms = rmw_uros_epoch_millis(); 
   }
+  return true;
 }
 
 void destroy_entities()
@@ -208,8 +206,8 @@ void setup() {
 		balltze_transport_read
 	);
 
+  imu_init(imu_msg);
 
-  // setup error LED
   pinMode(ERROR_LOOP_LED_PIN, OUTPUT);
   digitalWrite(ERROR_LOOP_LED_PIN, LOW);
 
