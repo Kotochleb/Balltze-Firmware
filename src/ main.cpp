@@ -1,12 +1,11 @@
 #include <Arduino.h>
 
-// standard libraries
-#include <stdio.h>
-#include <time.h>
-#include <math.h>
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BNO055.h>
+#include <utility/imumaths.h>
 
 // microros dependencies
-// #include <micro_ros_arduino.h>
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
 #include <rclc/rclc.h>
@@ -25,7 +24,7 @@
 
 
 #define ERROR_LOOP_LED_PIN (16)
-#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
+#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)) {error_loop();}}
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){}}
 #define EXECUTE_EVERY_N_MS(MS, X)  do { \
   static volatile int64_t init = -1; \
@@ -41,9 +40,6 @@ void error_loop(){
   }
 }
 
-
-extern int clock_gettime(clockid_t unused, struct timespec *tp);
-
 rclc_support_t support;
 rcl_node_t node;
 rcl_timer_t timer;
@@ -54,8 +50,11 @@ rcl_publisher_t odometry_publisher;
 rcl_publisher_t joint_state_publisher;
 nav_msgs__msg__Odometry odometry_msg;
 geometry_msgs__msg__Twist cmd_vel_msg;
-bool micro_ros_init_successful;
 
+TwoWire ImuWire(18, 19);
+Adafruit_BNO055 bno = Adafruit_BNO055(50, 0x29, &ImuWire);
+
+bool micro_ros_init_successful;
 
 enum states {
   WAITING_AGENT,
@@ -64,69 +63,18 @@ enum states {
   AGENT_DISCONNECTED
 } state;
 
-
-
-void euler_to_quat(float x, float y, float z, double* q) {
-  float c1 = cos((y*PI/180.0)/2.0);
-  float c2 = cos((z*PI/180.0)/2.0);
-  float c3 = cos((x*PI/180.0)/2.0);
-
-  float s1 = sin((y*PI/180.0)/2.0);
-  float s2 = sin((z*PI/180.0)/2.0);
-  float s3 = sin((x*PI/180.0)/2.0);
-
-  q[0] = c1 * c2 * c3 - s1 * s2 * s3;
-  q[1] = s1 * s2 * c3 + c1 * c2 * s3;
-  q[2] = s1 * c2 * c3 + c1 * s2 * s3;
-  q[3] = c1 * s2 * c3 - s1 * c2 * s3;
-}
-
-
 void subscription_callback(const void * msgin) {
   const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
   cmd_vel_msg.linear.x = msg->linear.x;
   cmd_vel_msg.angular.z = msg->angular.z;
 }
 
-
 void control_timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
   (void) last_call_time;
   if (timer != NULL) {
-    // // update encode readings
-    // int current_rotation_left = encoder_left.get_rotation();
-    // int current_rotation_right = encoder_right.get_rotation();
-
-    // // MODIFY CODE BELOW
-
-    // setpoint_left = (double) cmd_vel_msg.linear.x;
-    // state_left = (double) (current_rotation_left - last_rotation_left);
-    // pid_left_wheel.Compute();
-    // analogWrite(10, (int) (output_left * PWM_MAX_VAL));
-
-    // setpoint_right = (double) cmd_vel_msg.linear.x;
-    // state_right = (double) (current_rotation_right - last_rotation_right);
-    // pid_right_wheel.Compute();
-    // analogWrite(8, (int) (output_right * PWM_MAX_VAL));
-
-    // odometry_msg.twist.twist.linear.x = ((double) state_left + (double) state_right) / 2.0;
-
-    // // END OF YOUR CODE
-
-    // // set current encoder readings to be last ones
-    // last_rotation_left = current_rotation_left;
-    // last_rotation_right = current_rotation_right;
-
-    // // update time stamp in odometry message
-    // struct timespec tv = {0};
-    // clock_gettime(0, &tv);
-    // odometry_msg.header.stamp.nanosec = tv.tv_nsec;
-    // odometry_msg.header.stamp.sec = tv.tv_sec;
-
-    // publish odometry message
     RCSOFTCHECK(rcl_publish(&odometry_publisher, &odometry_msg, NULL));
   }
 }
-
 
 bool create_entities() {
   allocator = rcl_get_default_allocator();
@@ -196,6 +144,14 @@ void destroy_entities()
   RCSOFTCHECK(rclc_support_fini(&support));
 }
 
+void add_quat_to_msg(imu::Quaternion& quat)
+{
+  odometry_msg.pose.pose.orientation.w = quat.w();
+  odometry_msg.pose.pose.orientation.x = quat.x();
+  odometry_msg.pose.pose.orientation.y = quat.y();
+  odometry_msg.pose.pose.orientation.z = quat.z();
+}
+
 
 void setup() {
   // setup microros transport layer 
@@ -209,15 +165,25 @@ void setup() {
 	);
 
 
-  // setup error LED
+  // // setup error LED
   pinMode(ERROR_LOOP_LED_PIN, OUTPUT);
   digitalWrite(ERROR_LOOP_LED_PIN, LOW);
+
+    /* Initialise the sensor */
+  if (!bno.begin())
+  {
+    //There was a problem detecting the BNO055
+    error_loop();
+  }
 
   state = WAITING_AGENT;
 }
 
-
 void loop() {
+
+  imu::Quaternion quat = bno.getQuat();
+  add_quat_to_msg(quat);
+
   switch (state) {
     case WAITING_AGENT:
       EXECUTE_EVERY_N_MS(500, state = (RMW_RET_OK == rmw_uros_ping_agent(100, 1)) ? AGENT_AVAILABLE : WAITING_AGENT;);

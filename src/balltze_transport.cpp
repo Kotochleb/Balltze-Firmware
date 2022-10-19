@@ -1,15 +1,10 @@
 #include "balltze_transport.h"
 
-#include <Arduino.h>
 #include <uxr/client/profile/transport/custom/custom_transport.h>
-
-#include <stdio.h>
-#include <stdbool.h>
-#include <sys/time.h>
 
 #define micro_rollover_useconds 4294967295
 
-int clock_gettime(clockid_t unused, struct timespec *tp)
+int clock_get_time(clockid_t unused, struct timespec *tp)
 {
   (void)unused;
   static uint32_t rollover = 0;
